@@ -41,19 +41,30 @@ variable "subnet_id" {
 }
 
 variable "ssh_allowed_cidrs" {
-  description = "CIDRs allowed to SSH (port 22). Empty (default) opens no inbound ports; use SSM Session Manager instead."
+  description = "CIDRs allowed to SSH (port 22), e.g. [\"203.0.113.10/32\"]. Empty (default) opens no inbound ports; use SSM Session Manager instead. Avoid 0.0.0.0/0."
   type        = list(string)
   default     = []
+
+  validation {
+    condition     = alltrue([for c in var.ssh_allowed_cidrs : can(cidrhost(c, 0))])
+    error_message = "Every entry in ssh_allowed_cidrs must be a valid IPv4 CIDR block, e.g. 203.0.113.10/32."
+  }
+}
+
+variable "ssh_public_key" {
+  description = "Public key (e.g. contents of ~/.ssh/id_ed25519.pub) to register as an EC2 key pair. Needed to SSH in as the 'ubuntu' user. Takes precedence over ssh_key_name."
+  type        = string
+  default     = null
 }
 
 variable "ssh_key_name" {
-  description = "Existing EC2 key pair name, only needed if ssh_allowed_cidrs is set. Null means no key pair."
+  description = "Name of an existing EC2 key pair, as an alternative to ssh_public_key. Null means no key pair."
   type        = string
   default     = null
 }
 
 variable "user_data" {
-  description = "Optional cloud-init / shell script run on first boot."
+  description = "Optional shell snippet appended to the built-in first-boot bootstrap (which installs git, curl, tar, ca-certificates and libatomic1)."
   type        = string
   default     = null
 }

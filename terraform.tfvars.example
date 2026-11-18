@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars (git-ignored) and fill in. Never commit the real file.
+
+# Where SSH may come from. Use your own public IP as a /32, not 0.0.0.0/0.
+ssh_allowed_cidrs = ["203.0.113.10/32"]
+
+# Contents of your public key file (the .pub one, never the private key).
+ssh_public_key = "ssh-ed25519 AAAA...replace-me... you@host"
+
+# aws_profile = "your-sandbox-profile"
