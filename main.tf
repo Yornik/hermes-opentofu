@@ -41,6 +41,9 @@ locals {
     dashboard_password_b64 = base64encode(local.dashboard_password)
     dashboard_unit         = chomp(file("${path.module}/files/hermes-dashboard.service"))
     dashboard_setup_script = chomp(file("${path.module}/files/hermes-dashboard-setup.sh"))
+    auto_reboot            = var.auto_reboot
+    auto_reboot_time       = var.auto_reboot_time
+    install_gateway_service = var.install_gateway_service
   })
 
   # Optional var.user_data is a shell snippet appended after the bootstrap. Always marked

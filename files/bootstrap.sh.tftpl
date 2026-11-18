@@ -2,6 +2,7 @@
 # First-boot bootstrap, run once by cloud-init as root. Output: /var/log/cloud-init-output.log
 #
 #   1. base packages the installers need
+#   1b. unattended-upgrades: automatic reboots for kernel updates (auto_reboot)
 %{ if tailscale_auth_key != "" ~}
 #   2. Tailscale from its official apt repo, joined to your tailnet with the auth key you gave
 %{ else ~}
@@ -9,6 +10,7 @@
 #      run `sudo tailscale up --ssh --hostname=<name>` yourself)
 %{ endif ~}
 #   3. Hermes Agent for the `ubuntu` user, non-interactive (installed, NOT configured)
+#   3b. gateway as a systemd user service (install_gateway_service)
 %{ if enable_dashboard ~}
 #   4. Caddy + a hermes-dashboard systemd unit + the `hermes-dashboard-setup` helper
 #      (installed, NOT started: the helper wires them to your tailnet name after you join)
@@ -19,6 +21,22 @@ export DEBIAN_FRONTEND=noninteractive
 # --- 1. base packages ---
 apt-get update -y
 apt-get install -y --no-install-recommends ca-certificates curl git gnupg jq libatomic1 openssl tar
+
+# --- 1b. unattended-upgrades: reboot for kernel and other requiring updates ---
+# unattended-upgrades ships preinstalled and enabled on Ubuntu server images and installs
+# security updates daily, but its Automatic-Reboot default is false: a new kernel would be
+# installed and then never boot until someone logs in and reboots by hand. For an
+# unattended agent box, opt into the reboot. It waits for auto_reboot_time and skips the
+# reboot while a user is logged in (Automatic-Reboot-WithUsers stays off), and the Hermes
+# gateway comes back on its own afterwards once it has been installed as a service.
+%{ if auto_reboot ~}
+cat > /etc/apt/apt.conf.d/56unattended-upgrades-reboot <<'REBOOT_CONF_EOF'
+// Written by the first-boot bootstrap. Reboot when an unattended upgrade requires it
+// (kernels especially). See also: /var/run/reboot-required.
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "${auto_reboot_time}";
+REBOOT_CONF_EOF
+%{ endif ~}
 
 # --- 2. Tailscale ---
 . /etc/os-release
@@ -55,6 +73,17 @@ curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes-insta
 chmod 755 /tmp/hermes-install.sh
 sudo -u ubuntu -H bash /tmp/hermes-install.sh --non-interactive || hermes_status=$?
 rm -f /tmp/hermes-install.sh
+%{ if install_gateway_service ~}
+
+# --- 3b. gateway as a systemd user service (reboot- and logout-proof) ---
+# `--non-interactive` skips the gateway service install on purpose; add it back here.
+# With no chat platform configured the gateway just idles; the dashboard's restart
+# button picks up channels later. Linger needs root, so enable it from here.
+# Non-fatal: if it fails, run `hermes gateway install` by hand after configuring.
+sudo -u ubuntu -H bash -lc 'hermes gateway install' \
+  || echo "hermes gateway install failed; run it by hand later" >&2
+loginctl enable-linger ubuntu 2>/dev/null || true
+%{ endif ~}
 %{ if enable_dashboard ~}
 
 # --- 4. Tailnet dashboard: Caddy, systemd unit, setup helper ---
