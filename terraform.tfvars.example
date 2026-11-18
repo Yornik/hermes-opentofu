@@ -1,10 +1,28 @@
 # Copy to terraform.tfvars (git-ignored) and fill in. Never commit the real file.
 
-# Contents of your public key file (the .pub one, never the private key). Required for SSH.
+# Contents of your public key file (the .pub one, never the private key).
+# Keep it set even in tailnet-only mode: it is your break-glass way in.
 ssh_public_key = "ssh-ed25519 AAAA...replace-me... you@host"
 
 # SSH is opened to the public IP of the machine running tofu (default true).
-# Set to false for no inbound rules at all (Tailscale only) once Tailscale is joined and tested.
+# Set to false for no inbound rules at all, once Tailscale works.
 # ssh_allow_current_ip = false
+
+# Your tailnet's MagicDNS domain (Tailscale admin console, DNS page). Lets the Hermes dashboard
+# be wired at first boot. Identifying, so it belongs here and not in the repo.
+# tailnet_domain = "your-tailnet.ts.net"
+
+# Tailscale auth key, to join the tailnet at first boot. SECRET: do not put it in this file;
+# pass it through the environment instead, and use a one-off key with a short expiry:
+#   export TF_VAR_tailscale_auth_key='tskey-auth-...'
+
+# Hermes dashboard login. By default OpenTofu generates it; read it with
+#   tofu output dashboard_username
+#   tofu output -raw dashboard_password
+# Raise the word count for a stronger generated password (3 words is only about 30-35 bits):
+# dashboard_password_words = 6
+# Or choose your own (username here; password through the environment, it is a secret):
+# dashboard_username = "ops"
+#   export TF_VAR_dashboard_password='...16 to 128 printable characters...'
 
 # aws_profile = "your-sandbox-profile"

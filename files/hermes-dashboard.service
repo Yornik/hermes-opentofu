@@ -1,0 +1,21 @@
+[Unit]
+Description=Hermes Agent web dashboard (loopback only; Caddy publishes it on the tailnet)
+Documentation=https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu
+Environment=HOME=/home/ubuntu
+# Login, public URL and secret; written by hermes-dashboard-setup (root-only file).
+EnvironmentFile=/etc/hermes-dashboard/dashboard.env
+# A login shell puts ~/.local/bin on PATH, where the Hermes installer puts the launcher.
+ExecStart=/usr/bin/env bash -lc 'exec hermes dashboard --host 127.0.0.1 --port 9119 --no-open'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
