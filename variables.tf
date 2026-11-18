@@ -25,7 +25,7 @@ variable "instance_type" {
 variable "root_volume_size_gb" {
   description = "Root EBS volume size in GiB."
   type        = number
-  default     = 30
+  default     = 75
 }
 
 variable "ubuntu_version" {
@@ -40,15 +40,10 @@ variable "subnet_id" {
   default     = null
 }
 
-variable "ssh_allowed_cidrs" {
-  description = "CIDRs allowed to SSH (port 22), e.g. [\"203.0.113.10/32\"]. Empty (default) opens no inbound ports; use SSM Session Manager instead. Avoid 0.0.0.0/0."
-  type        = list(string)
-  default     = []
-
-  validation {
-    condition     = alltrue([for c in var.ssh_allowed_cidrs : can(cidrhost(c, 0))])
-    error_message = "Every entry in ssh_allowed_cidrs must be a valid IPv4 CIDR block, e.g. 203.0.113.10/32."
-  }
+variable "ssh_allow_current_ip" {
+  description = "Open SSH (TCP 22) to the public IP of the machine running tofu, and to nothing else. The IP is looked up via checkip.amazonaws.com at plan time and added as a /32; it is re-evaluated on every plan, so the rule follows your IP. Behind a VPN or shared NAT this is the VPN/NAT egress address. Set false to have no inbound rules at all, which leaves Tailscale as the only way in; only do that after Tailscale is joined and tested (SSM Session Manager is not enabled)."
+  type        = bool
+  default     = true
 }
 
 variable "ssh_public_key" {
@@ -64,7 +59,7 @@ variable "ssh_key_name" {
 }
 
 variable "user_data" {
-  description = "Optional shell snippet appended to the built-in first-boot bootstrap (which installs git, curl, tar, ca-certificates and libatomic1)."
+  description = "Optional shell snippet appended to the built-in first-boot bootstrap (which installs git, curl, tar, ca-certificates, libatomic1, Tailscale and Hermes Agent, unconfigured)."
   type        = string
   default     = null
 }
