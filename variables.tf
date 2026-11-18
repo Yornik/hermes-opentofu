@@ -34,10 +34,15 @@ variable "ubuntu_version" {
   default     = "26.04"
 }
 
-variable "subnet_id" {
-  description = "Subnet to launch into. Null picks the first subnet of the default VPC."
+variable "vpc_cidr" {
+  description = "CIDR block of the dedicated VPC created for the instance. The public subnet is the first /24 inside it, so the prefix must be /24 or shorter."
   type        = string
-  default     = null
+  default     = "10.200.0.0/16"
+
+  validation {
+    condition     = can(cidrsubnet(var.vpc_cidr, 8, 0))
+    error_message = "vpc_cidr must be a valid IPv4 CIDR block with a prefix length of /24 or shorter, e.g. 10.200.0.0/16."
+  }
 }
 
 variable "ssh_allow_current_ip" {

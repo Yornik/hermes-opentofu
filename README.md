@@ -11,7 +11,7 @@ OpenTofu config for deploying [Hermes Agent](https://github.com/NousResearch/her
   - `git`, `curl`, `tar`, `ca-certificates` and `libatomic1` (the Hermes installer needs them; minimal Ubuntu images lack `libatomic1`)
   - [Tailscale](https://tailscale.com) from its official apt repo (installed, **not joined**)
   - Hermes Agent for the `ubuntu` user, via the official installer with `--non-interactive` (installed, **not configured**)
-- Deployed into the default VPC of the target region (`eu-central-1` by default)
+- A dedicated VPC (`10.200.0.0/16` by default) with one public subnet, an internet gateway and a route table, in an availability zone that offers the instance type. The instance has a public IP and reaches the internet through the internet gateway, so **no NAT gateway** is needed (or created). Region: `eu-central-1` by default.
 
 State is local (`terraform.tfstate`, git-ignored). Add a remote backend before using this beyond a sandbox.
 
@@ -30,6 +30,7 @@ Log in with the sandbox account's credentials first (or set `aws_profile`). Comm
 |---|---|---|
 | `region` | `eu-central-1` | |
 | `instance_type` | `m7i-flex.large` | 2 vCPU / 8 GiB |
+| `vpc_cidr` | `10.200.0.0/16` | CIDR of the VPC this creates; the subnet is its first `/24` |
 | `root_volume_size_gb` | `75` | can be grown later without replacing the instance |
 | `ubuntu_version` | `26.04` | set `24.04` if a dependency does not support 26.04 yet |
 | `ssh_allow_current_ip` | `true` | opens SSH to the IP `tofu` runs from (looked up via `checkip.amazonaws.com` at plan time); `false` = no inbound rules at all |

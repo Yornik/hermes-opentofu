@@ -1,11 +1,10 @@
-data "aws_vpc" "default" {
-  default = true
-}
+# Availability zones in the region that offer the instance type (m7i-flex is not in every AZ).
+data "aws_ec2_instance_type_offerings" "this" {
+  location_type = "availability-zone"
 
-data "aws_subnets" "default" {
   filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
+    name   = "instance-type"
+    values = [var.instance_type]
   }
 }
 
@@ -15,7 +14,8 @@ data "aws_ssm_parameter" "ubuntu_ami" {
 }
 
 locals {
-  subnet_id = coalesce(var.subnet_id, sort(data.aws_subnets.default.ids)[0])
+  # First AZ (alphabetically) that offers the instance type; null if none does (checked on the subnet).
+  az = try(sort(data.aws_ec2_instance_type_offerings.this.locations)[0], null)
 
   # Runs once, on first boot (cloud-init). Installs what the Hermes installer needs:
   # git, curl, tar and CA certificates for the POSIX install script, and libatomic1, which the
@@ -91,12 +91,66 @@ resource "aws_key_pair" "this" {
 # Access is SSH from the current IP and Tailscale. There is deliberately no IAM instance profile,
 # so SSM Session Manager is not available and the instance has no AWS API permissions.
 
-# --- Network ---
+# --- Network: a dedicated VPC with one public subnet (this account has no default VPC) ---
+
+resource "aws_vpc" "this" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name = var.name
+  }
+}
+
+resource "aws_internet_gateway" "this" {
+  vpc_id = aws_vpc.this.id
+
+  tags = {
+    Name = var.name
+  }
+}
+
+resource "aws_subnet" "public" {
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = cidrsubnet(var.vpc_cidr, 8, 0)
+  availability_zone       = local.az
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "${var.name}-public"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = local.az != null
+      error_message = "No availability zone in ${var.region} offers ${var.instance_type}. Choose another instance_type or region."
+    }
+  }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.this.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.this.id
+  }
+
+  tags = {
+    Name = "${var.name}-public"
+  }
+}
+
+resource "aws_route_table_association" "public" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
+}
 
 resource "aws_security_group" "this" {
   name        = "${var.name}-ec2"
   description = "${var.name} instance: SSH from one IP only, all outbound"
-  vpc_id      = data.aws_vpc.default.id
+  vpc_id      = aws_vpc.this.id
 }
 
 resource "aws_vpc_security_group_egress_rule" "all" {
@@ -123,13 +177,16 @@ resource "aws_vpc_security_group_ingress_rule" "ssh" {
 resource "aws_instance" "this" {
   ami                    = data.aws_ssm_parameter.ubuntu_ami.value
   instance_type          = var.instance_type
-  subnet_id              = local.subnet_id
+  subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.this.id]
   key_name               = local.key_name
   user_data              = local.user_data
 
-  # Default VPC subnets auto-assign a public IP, which the instance needs for outbound internet.
+  # The instance needs a public IP for outbound internet (and for SSH from your IP).
   associate_public_ip_address = true
+
+  # The first-boot script downloads packages, so the default route must exist before the instance boots.
+  depends_on = [aws_route_table_association.public]
 
   metadata_options {
     http_endpoint = "enabled"
