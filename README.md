@@ -35,6 +35,7 @@ One `tofu apply` gives you a ready-to-configure box, with no clicking around the
 | **A dedicated VPC** | One public subnet, an internet gateway, a route table. Works in accounts that have no default VPC. **No NAT gateway**, so nothing expensive hiding in the bill. |
 | **At most one inbound rule** | SSH (TCP 22) from the public IP of the machine running `tofu`, as a single `/32`. Or none at all, if you join the tailnet with an auth key and switch it off. |
 | **Sensible host hardening** | IMDSv2 only, encrypted gp3 root volume, and no IAM role, so there are no AWS credentials on the box to steal. |
+| **Unattended security updates** | `unattended-upgrades` (Ubuntu default) installs security updates daily. `auto_reboot = true` (default) also reboots when an update requires one — overnight UTC, only while nobody is logged in. |
 
 > [!NOTE]
 > Defaults: Ubuntu 26.04 LTS, `m7i-flex.large` (2 vCPU / 8 GiB), 75 GiB gp3, region `eu-central-1`. All overridable, see [Configuration](#configuration).
@@ -183,7 +184,7 @@ Needs the [dashboard](#hermes-dashboard-on-your-tailnet) to be up. This follows 
 3. **API Keys page, LLM providers:** enter your OpenCode API key. It is **one key from your OpenCode console workspace**, not a separate key per plan — it works on both the Go subscription and the pay-as-you-go routes. One thing to know: usage beyond the plan limits falls back to the pay-as-you-go balance **only if *extra usage* is enabled in the OpenCode console**; with it switched off, requests beyond the plan are refused instead of billed. Pick deliberately: extra usage on means no interruptions, off means a hard ceiling. Hermes reads the key from a variable named after the provider you chose in step 2: `OPENCODE_GO_API_KEY` for `opencode-go`, `OPENCODE_ZEN_API_KEY` for `opencode-zen`. Set the one that matches your provider, and both (with the same value) if you use both. If your provider is not listed on the page, set the key from a terminal on the box instead: run `hermes setup` and enter it there, or append `OPENCODE_GO_API_KEY=*** to `~/.hermes/.env` — API keys live in `.env`, never in `config.yaml`.
 4. **Create the Telegram bot** on your phone: open `@BotFather` in Telegram, send `/newbot`, pick a name and a username, and copy the token. A phone number is never given to Hermes; the bot token is the credential. Get your own numeric user ID from `@userinfobot`.
 5. **Channels page, Telegram** (for Discord, see [Connect Discord](#connect-discord-instead-of-telegram-or-as-well) below): paste the token, put **your numeric user ID in the allowed users**, enable the channel, run the connection test, then use the restart button so the gateway picks it up.
-6. **Make the gateway survive reboots and logouts.** On the box, run `hermes gateway install`, then `hermes gateway status`. If the gateway stops when you disconnect, run `sudo loginctl enable-linger ubuntu` (Hermes tries to enable that itself).
+6. **Make the gateway survive reboots and logouts.** Done for you at first boot when `install_gateway_service = true` (default): the gateway runs as a systemd user service with linger enabled. Check it with `hermes gateway status`; if the service is ever missing, run `hermes gateway install`.
 7. **Say hello to your bot.** Check **Status**, **Sessions** and **Logs** in the dashboard if it stays silent.
 
 ### Option B: from the command line
@@ -358,6 +359,9 @@ Set variables with `terraform.tfvars`, `-var`, or `TF_VAR_<name>` environment va
 | `dashboard_password` | `null` | **Secret, sensitive.** Dashboard password, 16-128 printable ASCII characters. `null` generates one like `14-quietly-happy-otter!` |
 | `dashboard_password_words` | `3` | Words in the generated password (3-10). About 30-35 bits at 3; use 6+ for a stronger one |
 | `enable_tailnet_dashboard` | `true` | Install Caddy and the dashboard helper. Nothing starts or is exposed until the node has a tailnet name |
+| `auto_reboot` | `true` | Reboot automatically when unattended-upgrades installs an update that requires one (a kernel, for example). Overnight UTC, only while nobody is logged in |
+| `auto_reboot_time` | `02:00` | The reboot time (UTC, 24h clock) when `auto_reboot` is on |
+| `install_gateway_service` | `true` | Install the Hermes gateway as a systemd user service at first boot (and enable linger), so it survives reboots and SSH logouts |
 | `user_data` | `null` | Extra shell snippet appended after the built-in bootstrap |
 | `tags` | `Project`, `Environment`, `ManagedBy` | Tags applied to every resource |
 
@@ -368,9 +372,9 @@ Set variables with `terraform.tfvars`, `-var`, or `TF_VAR_<name>` environment va
 
 Runs once through cloud-init as root (`files/bootstrap.sh.tftpl`), in this order, so a later failure cannot block an earlier step:
 
-1. `apt-get install` of `ca-certificates curl git gnupg jq libatomic1 openssl tar` (the installers need them; minimal Ubuntu images lack `libatomic1`)
+1. `apt-get install` of `ca-certificates curl git gnupg jq libatomic1 openssl tar` (the installers need them; minimal Ubuntu images lack `libatomic1`). With `auto_reboot` on, it also writes the unattended-upgrades reboot drop-in, so a kernel update reboots the box overnight instead of waiting for a human.
 2. Adds Tailscale's official apt repository for the running Ubuntu codename and installs `tailscale`. With `tailscale_auth_key` set, joins the tailnet (`--ssh --hostname=<name>`), passing the key through a root-only tmpfs file and deleting it right after.
-3. Downloads the Hermes installer and runs it as `ubuntu` with `--non-interactive`, which skips the setup wizard and the gateway service install. A failure is remembered and reported at the very end.
+3. Downloads the Hermes installer and runs it as `ubuntu` with `--non-interactive`, which skips the setup wizard. A failure is remembered and reported at the very end. With `install_gateway_service` on (default), the bootstrap then installs the gateway as a systemd user service and enables linger, so reboots and SSH logouts never take the bot down — it idles with no channels until you connect one.
 4. With `enable_tailnet_dashboard`: adds Caddy's official apt repository and installs `caddy` (kept stopped), installs the `hermes-dashboard.service` unit and the `hermes-dashboard-setup` helper, writes the dashboard login into a root-only env file (the password travels base64-encoded, so symbols cannot be misread by the shell), and runs the helper if the tailnet name is already known.
 
 Your own `user_data`, if set, is appended after these steps. `user_data` is **ignored after the instance exists** (cloud-init runs it once); to run a changed version, use `tofu apply -replace=aws_instance.this`.
@@ -408,6 +412,7 @@ Money is spent on the **EC2 instance** (the big one), the **75 GiB volume**, and
 | **My IP changed** | Run `tofu apply` again from the new network. (Not an issue once SSH is closed and you use the tailnet.) |
 | **Bigger instance** | Change `instance_type` and apply. The instance stops and starts, and the public IP changes. |
 | **Bigger disk** | Raise `root_volume_size_gb` and apply (volumes can grow, never shrink). Reboot so cloud-init grows the filesystem, then check with `df -h`. |
+| **Kernel update pending** | `unattended-upgrades` installs security updates daily; with `auto_reboot = true` the box reboots itself at `auto_reboot_time` (UTC) when nobody is logged in. Check `/var/run/reboot-required`; `sudo reboot` if you do not want to wait. |
 | **Switch Ubuntu release** | Changing `ubuntu_version` does not replace a running instance (the AMI is ignored after creation). Recreate with `tofu apply -replace=aws_instance.this` (this wipes the disk, so back up anything you need first). |
 | **Re-run the first-boot script** | Same: `tofu apply -replace=aws_instance.this`. Editing `user_data` or the auth key on a running instance has no effect. For a new tailnet join without replacing, run `sudo tailscale up --ssh --hostname=hermes` by hand. |
 | **Rotate the dashboard password** | Edit `/etc/hermes-dashboard/dashboard.env` on the instance (keep the double quotes around the password) and `sudo systemctl restart hermes-dashboard`. Changing it in OpenTofu does not reach a running instance, and `tofu output` then shows the old value. |

@@ -131,6 +131,29 @@ variable "tailnet_domain" {
   }
 }
 
+variable "auto_reboot" {
+  description = "Reboot automatically when unattended-upgrades installs a kernel or other update that requires it (for example a new kernel). Writes Unattended-Upgrade::Automatic-Reboot into /etc/apt/apt.conf.d on first boot; unattended-upgrades itself ships enabled with Ubuntu and installs security updates daily. Reboots only happen when nobody is logged in (Automatic-Reboot-WithUsers stays off) and at auto_reboot_time. Safe because the gateway is installed as a systemd service at first boot (install_gateway_service), so it comes back on its own."
+  type        = bool
+  default     = true
+}
+
+variable "auto_reboot_time" {
+  description = "Time (24h clock) for automatic reboots caused by unattended-upgrades, when auto_reboot is true. The instance clock is UTC."
+  type        = string
+  default     = "02:00"
+
+  validation {
+    condition     = can(regex("^([01][0-9]|2[0-3]):[0-5][0-9]$", var.auto_reboot_time))
+    error_message = "auto_reboot_time must be a 24-hour clock time like \"02:00\"."
+  }
+}
+
+variable "install_gateway_service" {
+  description = "Install the Hermes gateway as ubuntu's systemd user service at first boot (hermes gateway install) and enable linger, so the gateway survives SSH logouts and server reboots. Needed for auto_reboot: without it, a reboot takes the bot down until someone logs in. The gateway starts with no chat platform configured and is harmless until you connect one."
+  type        = bool
+  default     = true
+}
+
 variable "user_data" {
   description = "Optional shell snippet appended to the built-in first-boot bootstrap (which installs git, curl, tar, ca-certificates, libatomic1, Tailscale and Hermes Agent, unconfigured)."
   type        = string
