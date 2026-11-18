@@ -180,9 +180,9 @@ Needs the [dashboard](#hermes-dashboard-on-your-tailnet) to be up. This follows 
    ```
 
 2. **Config page, `model` section:** choose the provider (`opencode-go` for the OpenCode Go plan, `opencode-zen` for Zen) and the default model. Use a model ID that your plan actually offers; check the provider's model list rather than guessing one.
-3. **API Keys page, LLM providers:** enter the OpenCode key (`OPENCODE_GO_API_KEY` for Go, `OPENCODE_ZEN_API_KEY` for Zen). If your provider is not listed there, set it from a terminal on the box instead: `hermes config set OPENCODE_GO_API_KEY <key>` (it is written to `~/.hermes/.env`).
+3. **API Keys page, LLM providers:** enter your OpenCode API key. It is **one key from your OpenCode console workspace**, not a separate key per plan — it works on both the Go subscription and the pay-as-you-go routes. One thing to know: usage beyond the plan limits falls back to the pay-as-you-go balance **only if *extra usage* is enabled in the OpenCode console**; with it switched off, requests beyond the plan are refused instead of billed. Pick deliberately: extra usage on means no interruptions, off means a hard ceiling. Hermes reads the key from a variable named after the provider you chose in step 2: `OPENCODE_GO_API_KEY` for `opencode-go`, `OPENCODE_ZEN_API_KEY` for `opencode-zen`. Set the one that matches your provider, and both (with the same value) if you use both. If your provider is not listed on the page, set the key from a terminal on the box instead: run `hermes setup` and enter it there, or append `OPENCODE_GO_API_KEY=*** to `~/.hermes/.env` — API keys live in `.env`, never in `config.yaml`.
 4. **Create the Telegram bot** on your phone: open `@BotFather` in Telegram, send `/newbot`, pick a name and a username, and copy the token. A phone number is never given to Hermes; the bot token is the credential. Get your own numeric user ID from `@userinfobot`.
-5. **Channels page, Telegram:** paste the token, put **your numeric user ID in the allowed users**, enable the channel, run the connection test, then use the restart button so the gateway picks it up.
+5. **Channels page, Telegram** (for Discord, see [Connect Discord](#connect-discord-instead-of-telegram-or-as-well) below): paste the token, put **your numeric user ID in the allowed users**, enable the channel, run the connection test, then use the restart button so the gateway picks it up.
 6. **Make the gateway survive reboots and logouts.** On the box, run `hermes gateway install`, then `hermes gateway status`. If the gateway stops when you disconnect, run `sudo loginctl enable-linger ubuntu` (Hermes tries to enable that itself).
 7. **Say hello to your bot.** Check **Status**, **Sessions** and **Logs** in the dashboard if it stays silent.
 
@@ -204,6 +204,34 @@ Then just run `hermes` in a project directory to chat in the terminal.
 **Telegram notes**
 - Messages arrive by **long polling** (the default), which is outbound-only. Do not enable webhook mode; it needs an inbound HTTPS port that this security group does not open.
 - Telegram cloud chats, which bots use, are **not end-to-end encrypted**; Secret Chats are, but a bot cannot use them. Keep API keys and secrets out of chat and enter them over SSH. Hermes also supports Signal, which is end-to-end encrypted but needs a phone number and `signal-cli`.
+
+### Connect Discord (instead of Telegram, or as well)
+
+Discord works the same way as Telegram from the box's point of view: the gateway makes an **outbound WebSocket connection** to Discord plus outbound REST calls, so it needs **no inbound port** and nothing in the security group. These steps follow Hermes's Discord documentation; Discord's Developer Portal layout can change, and I did not run them.
+
+You need a Discord account and a server you control (**Manage Server** permission). A private server with only you in it is the safest choice.
+
+1. **Create the application and bot.** In the [Discord Developer Portal](https://discord.com/developers/applications): *New Application*, name it (for example "Hermes Agent"), then open the **Bot** page. Hermes's guide asks for **Public Bot: ON** so Discord's own install link works, and **Require OAuth2 Code Grant: OFF**.
+2. **Enable the privileged intents** (the number one reason a Discord bot fails to start). On the same **Bot** page, under *Privileged Gateway Intents*, turn on **Message Content Intent** (required: without it Discord rejects the connection) and **Server Members Intent** (needed when you allowlist by username), then *Save Changes*.
+3. **Get the bot token.** Under *Token*, click *Reset Token* and copy it **immediately**: Discord shows it once. It is a long-lived secret: never commit it, and enter it only in Hermes.
+4. **Invite the bot to your server.** *Installation* page: enable **Guild Install**, choose *Discord Provided Link*, and under *Default Install Settings* pick the scopes `bot` and `applications.commands`. For permissions use the recommended integer `309237763136` (View Channels, Send Messages, Embed Links, Attach Files, Read Message History, Create Public Threads, Send Messages in Threads, Add Reactions); the documented minimum is `117760`. Or open this URL with your application ID:
+
+   ```
+   https://discord.com/oauth2/authorize?client_id=YOUR_APP_ID&scope=bot+applications.commands&permissions=309237763136
+   ```
+
+   Pick your server, *Authorize*. The bot appears in the member list, offline until the gateway runs.
+5. **Copy your Discord user ID.** Discord *Settings*, *Advanced*, turn **Developer Mode** on, then right-click your own name and choose *Copy User ID*.
+6. **Connect it in Hermes**, by whichever route you used in [Set up Hermes](#set-up-hermes):
+   - **Dashboard:** *Channels* page, Discord: paste the token, put your user ID in the allowed users, enable it, run the connection test, then restart the gateway.
+   - **Command line:** `hermes gateway setup`, choose *Discord* and paste the token; the wizard verifies the token, checks the intents, prints the invite link and allowlists you as owner.
+   - **By hand:** add `DISCORD_BOT_TOKEN=...` and `DISCORD_ALLOWED_USERS=<your user id>` to `~/.hermes/.env`, then `hermes gateway install` so it keeps running (see step 6 of Option A).
+7. **Talk to it.** In a **DM** Hermes answers every message. In a **server channel** it answers only when you @mention it, unless you set `discord.require_mention: false` in `~/.hermes/config.yaml` (Hermes's own recommendation for a solo setup; `discord.auto_thread: false` also stops it opening a thread for every chat). `DISCORD_HOME_CHANNEL=<channel id>` gives scheduled jobs a place to post.
+
+> [!WARNING]
+> **Always set `DISCORD_ALLOWED_USERS`** (or `DISCORD_ALLOWED_ROLES`). Without either, Hermes denies everyone, which is the safe default; never set `DISCORD_ALLOW_ALL_USERS=true`. Anyone you allow has **full access to the agent, including tool use and system access**, so on this machine that is a terminal. Prefer user IDs over roles: a role grants access the moment someone receives it, with no restart. Like Telegram, Discord text chats are not end-to-end encrypted, so keep API keys and other secrets out of the chat.
+
+**If the bot is online but silent:** the usual cause is the access policy. Check that `DISCORD_ALLOWED_USERS` holds your ID and that you restarted the gateway; the gateway log says `No Discord access policy configured; inbound Discord messages will be denied by default` when it is missing. **A "privileged intents" error at startup** means Message Content Intent (or Server Members Intent) is off in the Developer Portal. **A 403 Forbidden** means the bot's role lacks *View Channel*, *Send Messages*, *Create Public Threads* or *Send Messages in Threads* in that channel; check category-level and channel-level overrides too, since an explicit deny anywhere wins.
 
 ## Tailscale and locking SSH down
 
@@ -275,21 +303,38 @@ To choose your own instead, set `dashboard_username` and/or `dashboard_password`
 
 Set `enable_tailnet_dashboard = false` to skip Caddy and all of this.
 
-## Optional: Jev, a small decision model next to Hermes
+## Optional: Jev, cheap structured judgment next to Hermes
 
-Nothing in this repo needs it; this is background for later. **Jev** (by TypeSafe) is a fast "decision" model: you give it a state and typed questions (`noul` yes/no, `choice`, `score`) and it returns probabilities. It does not chat or write code, so it never replaces your coding model; it makes small, cheap decisions for the agent, such as "is this shell command risky?".
+Nothing in this repo needs it; this is background for later. **Jev** (by TypeSafe) is a small judgment model: you give it a state and typed questions (`noul` yes/no, `choice`, `score`) and it returns calibrated probabilities. It does not chat or write code, so it never replaces your coding model; it makes small, cheap decisions for the agent, such as "is this shell command destructive?".
 
-- **Where to get it.** OpenCode's console catalog lists `jev-1.13` (paid) and `jev-1.13-free` (limited time), at `https://opencode.ai/inference/systemone/v1/systemone`, authenticated with your OpenCode console API key. It is billed from the **pay-as-you-go balance, not the Go subscription**. TypeSafe's own docs do not list model IDs, and I could not confirm the model on OpenRouter.
-- **Hermes integration.** The community plugin `de-niji/jev-hermes` adds a `jev_decide` tool and a risky-command gate. It talks to OpenRouter by default, and only reads `OPENROUTER_API_KEY`; its endpoint and model can be overridden with `JEV_DECISIONS_URL` and `JEV_MODEL`, but to use OpenCode's key its key loader needs a small patch. Do not put your OpenCode key into `OPENROUTER_API_KEY` as a shortcut.
+- **Where to get it.** OpenCode's console catalog lists `jev-1.13` (paid) and `jev-1.13-free`, served at `https://opencode.ai/zen/v1/systemone` (`https://opencode.ai/inference/systemone/v1/systemone` reaches the same API), authenticated with your OpenCode console API key. It is billed from the **pay-as-you-go balance, not the Go subscription** — a test call returned `"billing_source": "balance"`; a minimal `noul` question cost about $0.000012. TypeSafe's own docs do not list model IDs, and I could not confirm the model on OpenRouter.
+- **The free variant has a string attached.** `jev-1.13-free` trains on request data, and the API refuses it until you enable *Allow free endpoints that train on request data* in Console → Settings → Privacy. The paid `jev-1.13` needs no such setting. Decide with your data in mind.
+- **Recommended integration: an MCP server, not the raw HTTP API.** The `@jkudish/jev-mcp` npm package turns Jev into 12 typed Hermes tools (`jev_decide`, `jev_verify`, `jev_noul`, `jev_classify`, `jev_compare`, `jev_extract`, `jev_find`, `jev_gate`, `jev_review`, `jev_rerank`, `jev_screen`, `jev_audit`), so the agent calls them like any other tool and a small skill can pin when to reach for them. It speaks to OpenCode directly — no OpenRouter key, no patch:
+
+  ```yaml
+  # ~/.hermes/config.yaml
+  mcp_servers:
+    jev:
+      command: npx
+      args: ["-y", "@jkudish/jev-mcp"]
+      enabled: true
+      env:
+        JEV_PROVIDER: compatible
+        JEV_API_BASE_URL: https://opencode.ai/zen/v1/systemone
+        JEV_MCP_MODEL: jev-1.13
+        JEV_API_KEY: <your OpenCode key>   # the same account key; billed from the balance
+  ```
+
 - **Test the endpoint first** (from your own terminal, nothing here is automated):
 
   ```sh
-  curl -sS https://opencode.ai/inference/systemone/v1/systemone \
-    -H "Authorization: Bearer $OPENCODE_API_KEY" -H "Content-Type: application/json" \
-    -d '{"model":"jev-1.13-free","state":"rm -rf /var/lib/postgresql","questions":{"risky":{"type":"noul","instructions":"Is this shell command destructive?"}}}'
+  curl -sS https://opencode.ai/zen/v1/systemone \
+    -H "Authorization: Bearer <your OpenCode key>" -H "Content-Type: application/json" \
+    -d '{"model":"jev-1.13","state":"rm -rf /var/lib/postgresql","questions":{"risky":{"type":"noul","instructions":"Is this shell command destructive?"}}}'
+  # → {"answers":{"risky":{"type":"noul","noul":0.99}}, ...}
   ```
 
-- **Why it is optional.** Hermes's own `smart` approval mode already judges risky commands with an auxiliary model, so Jev is mostly a cost and latency optimisation. The plugin is a tiny community project that reads API keys by design: read its code and pin a commit before installing it on a machine that holds your model key and has a terminal. None of this was run as part of this repo.
+- **Why it is optional.** Hermes's own `smart` approval mode already judges risky commands with an auxiliary model, so Jev is mostly a cost and latency optimisation. An earlier community plugin (`de-niji/jev-hermes`) adds only a `jev_decide` tool and a risky-command gate and reads third-party API keys by design — with the MCP route above there is no reason to install it. The MCP server and one live `noul` call were tested on 2026-11-18; none of it is automated by this repo.
 
 ## Configuration
 
@@ -385,7 +430,8 @@ Money is spent on the **EC2 instance** (the big one), the **75 GiB volume**, and
 | Dashboard URL does not load | `sudo systemctl status hermes-dashboard caddy`, then `journalctl -u hermes-dashboard -n 50` and `journalctl -u caddy -n 50`. Are you on the tailnet, with HTTPS certificates enabled in the admin console? |
 | Dashboard says *invalid host* or loops on login | The tailnet name differs from the one the dashboard was wired for (for example `hermes-1` after a name clash). Run `sudo hermes-dashboard-setup` to re-read the real name. |
 | Bootstrap seems to have failed | `cloud-init status --long` and `/var/log/cloud-init-output.log`. If a package or installer does not support Ubuntu 26.04 yet, set `ubuntu_version = "24.04"`. |
-| Bot does not reply | Is the gateway running (`hermes gateway start`)? Is your numeric user id in the allowlist? Is webhook mode accidentally enabled? |
+| Telegram bot does not reply | Is the gateway running (`hermes gateway start`)? Is your numeric user id in the allowlist? Is webhook mode accidentally enabled? |
+| Discord bot online but silent, or a "privileged intents" or 403 error | See [Connect Discord](#connect-discord-instead-of-telegram-or-as-well): the allowlist, Message Content Intent and channel permissions are the three usual causes. |
 
 ## Project layout
 
