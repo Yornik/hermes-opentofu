@@ -29,7 +29,7 @@ One `tofu apply` gives you a ready-to-configure box, with no clicking around the
 
 | | |
 |---|---|
-| **Hermes Agent**, pre-installed | Installed for the `ubuntu` user with the official installer in non-interactive mode. Installed, **not configured**: you choose the provider, model and chat platform. |
+| **Hermes Agent**, pre-installed | Installed for the `ubuntu` user with the official installer in non-interactive mode. Installed, **not configured**: you choose the provider, model and chat platform, from the dashboard or the CLI (see [Set up Hermes](#set-up-hermes)). |
 | **Tailscale**, pre-installed | Joins your tailnet at first boot if you pass an auth key; otherwise installed and waiting for one `tailscale up`. Either way you can close public SSH entirely. |
 | **Hermes dashboard on your tailnet** | Caddy publishes Hermes's built-in web dashboard (sessions, usage and costs, logs, cron, config) over HTTPS **on your tailnet only**, behind Hermes's own login. No inbound port is opened for it. See [Hermes dashboard on your tailnet](#hermes-dashboard-on-your-tailnet). |
 | **A dedicated VPC** | One public subnet, an internet gateway, a route table. Works in accounts that have no default VPC. **No NAT gateway**, so nothing expensive hiding in the bill. |
@@ -161,7 +161,29 @@ tail -f /var/log/cloud-init-output.log
 
 ## Set up Hermes
 
-Hermes is installed but unconfigured. As the `ubuntu` user (a fresh login shell, so `hermes` is on your `PATH`):
+Hermes is installed but unconfigured. It needs two things before it can answer anything: a **model provider with its API key** (for example OpenCode), and optionally a **chat platform** (for example Telegram). Nothing in this repo asks for those keys: they are long-lived secrets, so they stay out of the OpenTofu state, saved plans and user-data. You enter them once, either way below.
+
+### Option A: from the dashboard (recommended)
+
+Needs the [dashboard](#hermes-dashboard-on-your-tailnet) to be up. This follows Hermes's own documentation of its dashboard; the exact page layout may differ between Hermes versions.
+
+1. **Open the dashboard and log in.** The URL is `tofu output dashboard_url` (set `tailnet_domain` for it to be filled in, otherwise it is `https://<name>.<your-tailnet>.ts.net`). The login is:
+
+   ```sh
+   tofu output dashboard_username
+   tofu output -raw dashboard_password
+   ```
+
+2. **Config page, `model` section:** choose the provider (`opencode-go` for the OpenCode Go plan, `opencode-zen` for Zen) and the default model. Use a model ID that your plan actually offers; check the provider's model list rather than guessing one.
+3. **API Keys page, LLM providers:** enter the OpenCode key (`OPENCODE_GO_API_KEY` for Go, `OPENCODE_ZEN_API_KEY` for Zen). If your provider is not listed there, set it from a terminal on the box instead: `hermes config set OPENCODE_GO_API_KEY <key>` (it is written to `~/.hermes/.env`).
+4. **Create the Telegram bot** on your phone: open `@BotFather` in Telegram, send `/newbot`, pick a name and a username, and copy the token. A phone number is never given to Hermes; the bot token is the credential. Get your own numeric user ID from `@userinfobot`.
+5. **Channels page, Telegram:** paste the token, put **your numeric user ID in the allowed users**, enable the channel, run the connection test, then use the restart button so the gateway picks it up.
+6. **Make the gateway survive reboots and logouts.** On the box, run `hermes gateway install`, then `hermes gateway status`. If the gateway stops when you disconnect, run `sudo loginctl enable-linger ubuntu` (Hermes tries to enable that itself).
+7. **Say hello to your bot.** Check **Status**, **Sessions** and **Logs** in the dashboard if it stays silent.
+
+### Option B: from the command line
+
+On the box, as the `ubuntu` user (a fresh login shell, so `hermes` is on your `PATH`):
 
 ```sh
 hermes setup             # provider, model, API key
@@ -302,6 +324,7 @@ Your own `user_data`, if set, is appended after these steps. `user_data` is **ig
 
 **Known limitations**
 - **Local state.** `terraform.tfstate` stays on your machine (git-ignored) and contains the auth key if you used one. Add a remote backend with encryption before using this beyond a personal sandbox.
+- **The model key and chat bot are set up by hand, once.** Rebuilding the instance means doing [Set up Hermes](#set-up-hermes) again. That is deliberate: the OpenCode key and bot token are long-lived secrets, and this keeps them out of the OpenTofu state and the instance's user-data.
 - **Unpinned installers.** Hermes, Tailscale's and Caddy's repositories are fetched at first boot, so you get whatever is current.
 - **Public IP is not fixed.** It changes when the instance is stopped and started. Attach an Elastic IP if you need it stable (not needed for tailnet access).
 - **Prompts leave AWS.** Whatever you send the agent goes to your chosen model provider and chat platform.
