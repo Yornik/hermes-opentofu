@@ -24,6 +24,17 @@ output "tailscale_up_command" {
 }
 
 output "dashboard_url" {
-  description = "Tailnet-only URL of the Hermes web dashboard (login: admin, password in /etc/hermes-dashboard/dashboard.env on the instance). Null unless tailnet_domain is set; otherwise run `sudo hermes-dashboard-setup` after joining and it prints the URL."
+  description = "Tailnet-only URL of the Hermes web dashboard (login: the dashboard_username and dashboard_password outputs). Null unless tailnet_domain is set; otherwise the URL is https://<name>.<your-tailnet>.ts.net, and `sudo hermes-dashboard-setup` prints it."
   value       = var.enable_tailnet_dashboard && local.tailnet_fqdn != "" ? "https://${local.tailnet_fqdn}" : null
+}
+
+output "dashboard_username" {
+  description = "Login for the Hermes dashboard: the username you set, or two generated words. Null when the dashboard is disabled."
+  value       = var.enable_tailnet_dashboard ? local.dashboard_username : null
+}
+
+output "dashboard_password" {
+  description = "Password for the Hermes dashboard (the one you set, or a generated passphrase). Print it with `tofu output -raw dashboard_password`. It is the login seeded at first boot; if you change it on the instance later, this output goes stale. Null when the dashboard is disabled."
+  value       = var.enable_tailnet_dashboard ? local.dashboard_password : null
+  sensitive   = true
 }

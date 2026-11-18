@@ -16,4 +16,13 @@ ssh_public_key = "ssh-ed25519 AAAA...replace-me... you@host"
 # pass it through the environment instead, and use a one-off key with a short expiry:
 #   export TF_VAR_tailscale_auth_key='tskey-auth-...'
 
+# Hermes dashboard login. By default OpenTofu generates it; read it with
+#   tofu output dashboard_username
+#   tofu output -raw dashboard_password
+# Raise the word count for a stronger generated password (3 words is only about 30-35 bits):
+# dashboard_password_words = 6
+# Or choose your own (username here; password through the environment, it is a secret):
+# dashboard_username = "ops"
+#   export TF_VAR_dashboard_password='...16 to 128 printable characters...'
+
 # aws_profile = "your-sandbox-profile"

@@ -80,6 +80,25 @@ cat > /usr/local/sbin/hermes-dashboard-setup <<'HERMES_DASHBOARD_SETUP_EOF'
 ${dashboard_setup_script}
 HERMES_DASHBOARD_SETUP_EOF
 chmod 755 /usr/local/sbin/hermes-dashboard-setup
+%{ if dashboard_password_b64 != "" ~}
+
+# The dashboard login was chosen in OpenTofu (dashboard_username / dashboard_password). Seed the
+# root-only env file with it; hermes-dashboard-setup only generates a random login when this file does
+# not exist yet. The password arrives base64-encoded so that symbols ($ " \ ! ; | ...) cannot be
+# interpreted by this script, and is written double-quoted, as systemd's EnvironmentFile expects.
+dash_pw="$(printf '%s' '${dashboard_password_b64}' | base64 -d)"
+dash_pw_escaped="$(printf '%s' "$dash_pw" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+install -d -m 0755 /etc/hermes-dashboard
+(
+  umask 077
+  {
+    echo "HERMES_DASHBOARD_BASIC_AUTH_USERNAME=${dashboard_username}"
+    printf 'HERMES_DASHBOARD_BASIC_AUTH_PASSWORD="%s"\n' "$dash_pw_escaped"
+    echo "HERMES_DASHBOARD_BASIC_AUTH_SECRET=$(openssl rand -hex 32)"
+  } > /etc/hermes-dashboard/dashboard.env
+)
+unset dash_pw dash_pw_escaped
+%{ endif ~}
 %{ if tailscale_auth_key != "" ~}
 
 # The node joined above, so the helper reads its real tailnet name. Not fatal: if it fails, run

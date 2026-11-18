@@ -17,6 +17,11 @@ locals {
   # First AZ (alphabetically) that offers the instance type; null if none does (checked on the subnet).
   az = try(sort(data.aws_ec2_instance_type_offerings.this.locations)[0], null)
 
+  # Dashboard login: yours if you set it, otherwise generated below. Both are stored in the state, so
+  # `tofu output` shows them; they are seeded onto the instance at first boot only.
+  dashboard_username = var.dashboard_username != null ? var.dashboard_username : random_pet.dashboard_username[0].id
+  dashboard_password = sensitive(var.dashboard_password != null ? var.dashboard_password : "${random_integer.dashboard_password_number[0].result}-${random_pet.dashboard_password_words[0].id}!")
+
   # The node's tailnet name once it joins with `--hostname=<name>`; empty when tailnet_domain is unset,
   # in which case hermes-dashboard-setup detects the real name after you join.
   tailnet_fqdn = var.tailnet_domain == null ? "" : "${var.name}.${var.tailnet_domain}"
@@ -32,6 +37,8 @@ locals {
     dashboard_fqdn         = local.tailnet_fqdn
     node_name              = var.name
     tailscale_auth_key     = var.tailscale_auth_key == null ? "" : var.tailscale_auth_key
+    dashboard_username     = local.dashboard_username
+    dashboard_password_b64 = base64encode(local.dashboard_password)
     dashboard_unit         = chomp(file("${path.module}/files/hermes-dashboard.service"))
     dashboard_setup_script = chomp(file("${path.module}/files/hermes-dashboard-setup.sh"))
   })
@@ -227,4 +234,29 @@ check "a_way_in_exists" {
     condition     = local.ssh_enabled || local.has_auth_key
     error_message = "SSH is closed and no tailscale_auth_key is set. That is fine if this instance has already joined your tailnet; on a new instance nothing could reach it (there is no SSM)."
   }
+}
+
+# --- Dashboard login, generated unless you set dashboard_username / dashboard_password ---
+# Example result: user "happy-otter", password "14-quietly-happy-otter!". Random values live in the
+# state, so they stay the same across applies. They are only used at first boot (see user_data).
+
+resource "random_pet" "dashboard_username" {
+  count = var.dashboard_username == null ? 1 : 0
+
+  length    = 2
+  separator = "-"
+}
+
+resource "random_pet" "dashboard_password_words" {
+  count = var.dashboard_password == null ? 1 : 0
+
+  length    = var.dashboard_password_words
+  separator = "-"
+}
+
+resource "random_integer" "dashboard_password_number" {
+  count = var.dashboard_password == null ? 1 : 0
+
+  min = 10
+  max = 99
 }

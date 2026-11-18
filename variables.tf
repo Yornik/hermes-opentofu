@@ -86,6 +86,40 @@ variable "tailscale_auth_key" {
   }
 }
 
+variable "dashboard_username" {
+  description = "Username for the Hermes dashboard login. When null (default), OpenTofu generates two random words (for example \"happy-otter\"). Read it with `tofu output dashboard_username`."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.dashboard_username == null || can(regex("^[a-z][a-z0-9_-]{2,31}$", var.dashboard_username))
+    error_message = "dashboard_username must be 3-32 characters: lowercase letters, digits, underscore or hyphen, starting with a letter."
+  }
+}
+
+variable "dashboard_password" {
+  description = "Password for the Hermes dashboard login. When null (default), OpenTofu generates a passphrase like \"14-quietly-happy-otter!\" (a number, dictionary words and a symbol); read it with `tofu output -raw dashboard_password`. Set your own instead if you prefer: any passphrase generator works (for example Crypt::HSXKPasswd, or `openssl rand -hex 16`). SECRET: pass it as TF_VAR_dashboard_password. 16-128 printable ASCII characters (symbols and spaces are fine; it is carried base64-encoded and quoted). Either way it ends up in the OpenTofu state, saved plan and user-data like the other secrets here."
+  type        = string
+  default     = null
+  sensitive   = true
+
+  validation {
+    condition     = var.dashboard_password == null || can(regex("^[ -~]{16,128}$", var.dashboard_password))
+    error_message = "dashboard_password must be 16-128 printable ASCII characters (the value is not shown because it is a secret)."
+  }
+}
+
+variable "dashboard_password_words" {
+  description = "Number of random words in the generated dashboard password (ignored when dashboard_password is set). Each word adds roughly 9-10 bits on top of the ~6.5 bits of the two-digit number, so the default 3 is only about 30-35 bits: fine against casual guessing on a tailnet-only login, thin for something that opens a terminal. Use 6 or more for a stronger one, or set dashboard_password yourself."
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.dashboard_password_words >= 3 && var.dashboard_password_words <= 10 && floor(var.dashboard_password_words) == var.dashboard_password_words
+    error_message = "dashboard_password_words must be a whole number between 3 and 10."
+  }
+}
+
 variable "tailnet_domain" {
   description = "Your tailnet's MagicDNS domain, e.g. \"your-tailnet.ts.net\" (Tailscale admin console, DNS page). When set (and no tailscale_auth_key), the dashboard is fully wired at first boot for the node name \"<name>.<tailnet_domain>\"; join with `sudo tailscale up --ssh --hostname=<name>`. With a tailscale_auth_key the real name is read after the join, so this is only used for the dashboard_url output. When both are null, run `sudo hermes-dashboard-setup` after joining. Not a secret, but identifying: put it in your git-ignored terraform.tfvars or TF_VAR_tailnet_domain, not in the repo."
   type        = string
