@@ -62,7 +62,7 @@ flowchart LR
 Hermes only makes **outbound** connections (to your model provider and to chat platforms; Telegram uses long polling by default), so the security group needs no inbound rule for it. Tailscale traffic arrives through the WireGuard tunnel the node opens outbound, so the dashboard needs no security group rule either.
 
 <details>
-<summary><b>Resources created (10)</b></summary>
+<summary><b>Resources created (13: 10 AWS + 3 random)</b></summary>
 
 | Resource | Purpose |
 |---|---|
@@ -76,7 +76,7 @@ Hermes only makes **outbound** connections (to your model provider and to chat p
 | `aws_key_pair` | From the public key you supply |
 | `aws_instance` | The Hermes box, with the first-boot bootstrap as `user_data` |
 
-The dashboard, Caddy and Tailscale add no AWS resources: they are software on the instance.
+Three more resources (`random_pet` x2 and `random_integer`) generate the dashboard login; they create nothing in AWS. The dashboard, Caddy and Tailscale add no AWS resources either: they are software on the instance.
 
 </details>
 
@@ -103,7 +103,12 @@ tofu plan -out=tfplan
 tofu apply tfplan
 ```
 
-A healthy plan shows **10 to add**: exactly one SSH ingress rule, no IAM resources, no NAT gateway.
+A healthy first plan shows **13 to add** (10 AWS resources plus 3 random values for the dashboard login): exactly one SSH ingress rule, no IAM resources, no NAT gateway. With `ssh_allow_current_ip = false` it is 12.
+
+After applying, **delete the saved plan**: `rm tfplan`. It contains any secret you passed (the Tailscale auth key, a dashboard password you chose).
+
+> [!WARNING]
+> **Always read the plan before applying, and stop if it says `aws_instance.this` "must be replaced".** Replacing the instance wipes its disk, including everything Hermes stored. The classic cause is planning from a new terminal without `ssh_public_key`: changing the key pair forces a replacement. Keep `ssh_public_key` and `tailnet_domain` in your git-ignored `terraform.tfvars` so every plan sees the same values. (`user_data` and the AMI are ignored after creation, so editing those never replaces a running instance.)
 
 > [!TIP]
 > Prefer files over environment variables? Copy `terraform.tfvars.example` to `terraform.tfvars` (git-ignored) and fill it in. Values in `terraform.tfvars` win over `TF_VAR_*` variables.
@@ -121,7 +126,7 @@ export TF_VAR_ssh_allow_current_ip=false              # no inbound rules at all
 export TF_VAR_tailnet_domain='<your-tailnet>.ts.net'  # optional: only used for the dashboard_url output
 export TF_VAR_ssh_public_key="$(cat ~/.ssh/id_ed25519.pub)"   # keep this: break-glass access
 
-tofu plan -out=tfplan && tofu apply tfplan
+tofu plan -out=tfplan && tofu apply tfplan && rm tfplan
 ```
 
 A few minutes after the apply, the node shows up in your tailnet as `hermes`, and from any device on it:
@@ -270,6 +275,22 @@ To choose your own instead, set `dashboard_username` and/or `dashboard_password`
 
 Set `enable_tailnet_dashboard = false` to skip Caddy and all of this.
 
+## Optional: Jev, a small decision model next to Hermes
+
+Nothing in this repo needs it; this is background for later. **Jev** (by TypeSafe) is a fast "decision" model: you give it a state and typed questions (`noul` yes/no, `choice`, `score`) and it returns probabilities. It does not chat or write code, so it never replaces your coding model; it makes small, cheap decisions for the agent, such as "is this shell command risky?".
+
+- **Where to get it.** OpenCode's console catalog lists `jev-1.13` (paid) and `jev-1.13-free` (limited time), at `https://opencode.ai/inference/systemone/v1/systemone`, authenticated with your OpenCode console API key. It is billed from the **pay-as-you-go balance, not the Go subscription**. TypeSafe's own docs do not list model IDs, and I could not confirm the model on OpenRouter.
+- **Hermes integration.** The community plugin `de-niji/jev-hermes` adds a `jev_decide` tool and a risky-command gate. It talks to OpenRouter by default, and only reads `OPENROUTER_API_KEY`; its endpoint and model can be overridden with `JEV_DECISIONS_URL` and `JEV_MODEL`, but to use OpenCode's key its key loader needs a small patch. Do not put your OpenCode key into `OPENROUTER_API_KEY` as a shortcut.
+- **Test the endpoint first** (from your own terminal, nothing here is automated):
+
+  ```sh
+  curl -sS https://opencode.ai/inference/systemone/v1/systemone \
+    -H "Authorization: Bearer $OPENCODE_API_KEY" -H "Content-Type: application/json" \
+    -d '{"model":"jev-1.13-free","state":"rm -rf /var/lib/postgresql","questions":{"risky":{"type":"noul","instructions":"Is this shell command destructive?"}}}'
+  ```
+
+- **Why it is optional.** Hermes's own `smart` approval mode already judges risky commands with an auxiliary model, so Jev is mostly a cost and latency optimisation. The plugin is a tiny community project that reads API keys by design: read its code and pin a commit before installing it on a machine that holds your model key and has a terminal. None of this was run as part of this repo.
+
 ## Configuration
 
 Set variables with `terraform.tfvars`, `-var`, or `TF_VAR_<name>` environment variables.
@@ -325,6 +346,7 @@ Your own `user_data`, if set, is appended after these steps. `user_data` is **ig
 **Known limitations**
 - **Local state.** `terraform.tfstate` stays on your machine (git-ignored) and contains the auth key if you used one. Add a remote backend with encryption before using this beyond a personal sandbox.
 - **The model key and chat bot are set up by hand, once.** Rebuilding the instance means doing [Set up Hermes](#set-up-hermes) again. That is deliberate: the OpenCode key and bot token are long-lived secrets, and this keeps them out of the OpenTofu state and the instance's user-data.
+- **A generated dashboard password is visible in the apply log.** `random_pet` and `random_integer` print their value as `[id=...]` when they are created, so the words and the number of the generated password appear in the terminal (the `dashboard_password` *output* is hidden, the log lines are not). Treat the apply output as secret, do not paste it anywhere, and rotate the password on the instance if it leaked; or set `dashboard_password` yourself, which creates no such resources.
 - **Unpinned installers.** Hermes, Tailscale's and Caddy's repositories are fetched at first boot, so you get whatever is current.
 - **Public IP is not fixed.** It changes when the instance is stopped and started. Attach an Elastic IP if you need it stable (not needed for tailnet access).
 - **Prompts leave AWS.** Whatever you send the agent goes to your chosen model provider and chat platform.
