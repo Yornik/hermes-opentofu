@@ -1,0 +1,103 @@
+#!/bin/bash
+# First-boot bootstrap, run once by cloud-init as root. Output: /var/log/cloud-init-output.log
+#
+#   1. base packages the installers need
+%{ if tailscale_auth_key != "" ~}
+#   2. Tailscale from its official apt repo, joined to your tailnet with the auth key you gave
+%{ else ~}
+#   2. Tailscale from its official apt repo (installed, NOT joined: no auth key was given;
+#      run `sudo tailscale up --ssh --hostname=<name>` yourself)
+%{ endif ~}
+#   3. Hermes Agent for the `ubuntu` user, non-interactive (installed, NOT configured)
+%{ if enable_dashboard ~}
+#   4. Caddy + a hermes-dashboard systemd unit + the `hermes-dashboard-setup` helper
+#      (installed, NOT started: the helper wires them to your tailnet name after you join)
+%{ endif ~}
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+# --- 1. base packages ---
+apt-get update -y
+apt-get install -y --no-install-recommends ca-certificates curl git gnupg jq libatomic1 openssl tar
+
+# --- 2. Tailscale ---
+. /etc/os-release
+mkdir -p --mode=0755 /usr/share/keyrings
+curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/$VERSION_CODENAME.noarmor.gpg" -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/$VERSION_CODENAME.tailscale-keyring.list" -o /etc/apt/sources.list.d/tailscale.list
+apt-get update -y
+apt-get install -y tailscale
+%{ if tailscale_auth_key != "" ~}
+
+# Join the tailnet now. The key goes through a root-only file on tmpfs (never the command line)
+# and is deleted right after. A failed join is reported but does not stop the rest of the script,
+# so the box still comes up (and stays reachable by SSH if you left that rule on).
+ts_status=0
+for _ in $(seq 1 30); do
+  systemctl is-active --quiet tailscaled && break
+  sleep 1
+done
+install -m 0600 /dev/null /run/tailscale-authkey
+printf '%s' '${tailscale_auth_key}' > /run/tailscale-authkey
+timeout 120 tailscale up --ssh --hostname='${node_name}' --auth-key=file:/run/tailscale-authkey || ts_status=$?
+rm -f /run/tailscale-authkey
+if [ "$ts_status" -ne 0 ]; then
+  echo "tailscale up failed (exit $ts_status). The auth key may be expired, already used, or invalid." >&2
+fi
+%{ endif ~}
+
+# --- 3. Hermes Agent ---
+# The installer puts everything under $HOME and edits shell rc files, so it must not run as root.
+# `--non-interactive` skips the setup wizard and the gateway service install. A failure here is
+# remembered and reported at the very end, so it cannot stop the steps after it.
+hermes_status=0
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes-install.sh
+chmod 755 /tmp/hermes-install.sh
+sudo -u ubuntu -H bash /tmp/hermes-install.sh --non-interactive || hermes_status=$?
+rm -f /tmp/hermes-install.sh
+%{ if enable_dashboard ~}
+
+# --- 4. Tailnet dashboard: Caddy, systemd unit, setup helper ---
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o /etc/apt/sources.list.d/caddy-stable.list
+chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
+apt-get update -y
+apt-get install -y caddy
+
+# The package starts Caddy with a welcome page on :80. Replace that with an empty config and keep
+# Caddy off until hermes-dashboard-setup knows the tailnet name.
+cat > /etc/caddy/Caddyfile <<'CADDYFILE_EOF'
+# Written by hermes-dashboard-setup once this node has joined Tailscale.
+CADDYFILE_EOF
+systemctl disable --now caddy
+
+cat > /etc/systemd/system/hermes-dashboard.service <<'HERMES_DASHBOARD_UNIT_EOF'
+${dashboard_unit}
+HERMES_DASHBOARD_UNIT_EOF
+systemctl daemon-reload
+
+cat > /usr/local/sbin/hermes-dashboard-setup <<'HERMES_DASHBOARD_SETUP_EOF'
+${dashboard_setup_script}
+HERMES_DASHBOARD_SETUP_EOF
+chmod 755 /usr/local/sbin/hermes-dashboard-setup
+%{ if tailscale_auth_key != "" ~}
+
+# The node joined above, so the helper reads its real tailnet name. Not fatal: if it fails, run
+# `sudo hermes-dashboard-setup` by hand.
+/usr/local/sbin/hermes-dashboard-setup \
+  || echo "hermes-dashboard-setup failed; run it again by hand: sudo hermes-dashboard-setup" >&2
+%{ else ~}
+%{ if dashboard_fqdn != "" ~}
+
+# The tailnet name is known (tailnet_domain is set), so wire the dashboard now. Not fatal: if it
+# fails, run `sudo hermes-dashboard-setup` by hand after joining Tailscale.
+HERMES_DASHBOARD_FQDN='${dashboard_fqdn}' /usr/local/sbin/hermes-dashboard-setup \
+  || echo "hermes-dashboard-setup failed; run it again by hand after joining Tailscale" >&2
+%{ endif ~}
+%{ endif ~}
+%{ endif ~}
+
+if [ "$hermes_status" -ne 0 ]; then
+  echo "Hermes installer failed (exit $hermes_status); see its output above." >&2
+  exit "$hermes_status"
+fi

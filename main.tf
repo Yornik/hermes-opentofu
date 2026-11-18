@@ -17,41 +17,32 @@ locals {
   # First AZ (alphabetically) that offers the instance type; null if none does (checked on the subnet).
   az = try(sort(data.aws_ec2_instance_type_offerings.this.locations)[0], null)
 
-  # Runs once, on first boot (cloud-init). Installs what the Hermes installer needs:
-  # git, curl, tar and CA certificates for the POSIX install script, and libatomic1, which the
-  # managed Node.js links against and minimal Ubuntu images do not ship.
-  # Also installs Tailscale from its official apt repo (codename taken from /etc/os-release).
-  # Tailscale is NOT joined to a tailnet here, because that needs an auth key and secrets do not
-  # belong in user_data. Join once by hand: `sudo tailscale up --ssh`.
-  # Finally installs Hermes Agent for the `ubuntu` user (the installer puts everything under $HOME
-  # and edits shell rc files, so it must not run as root). `--non-interactive` skips the setup
-  # wizard and the gateway service install, so Hermes is installed but NOT configured: run
-  # `hermes setup` and `hermes gateway install` yourself. Add `--skip-browser` to the installer
-  # call to leave out the browser tools if disk or memory gets tight.
-  # Tailscale goes before Hermes so a failed Hermes install cannot block the Tailscale install.
-  # Output ends up in /var/log/cloud-init-output.log.
-  bootstrap = <<-EOT
-    #!/bin/bash
-    set -euo pipefail
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -y
-    apt-get install -y --no-install-recommends ca-certificates curl git libatomic1 tar
+  # The node's tailnet name once it joins with `--hostname=<name>`; empty when tailnet_domain is unset,
+  # in which case hermes-dashboard-setup detects the real name after you join.
+  tailnet_fqdn = var.tailnet_domain == null ? "" : "${var.name}.${var.tailnet_domain}"
 
-    . /etc/os-release
-    mkdir -p --mode=0755 /usr/share/keyrings
-    curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/$VERSION_CODENAME.noarmor.gpg" -o /usr/share/keyrings/tailscale-archive-keyring.gpg
-    curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/$VERSION_CODENAME.tailscale-keyring.list" -o /etc/apt/sources.list.d/tailscale.list
-    apt-get update -y
-    apt-get install -y tailscale
+  # First-boot script (cloud-init, runs once as root): base packages, Tailscale (joined if
+  # tailscale_auth_key is set, otherwise just installed), Hermes Agent (not configured) and, if
+  # enable_tailnet_dashboard is set, Caddy plus the hermes-dashboard unit and setup helper.
+  # See files/bootstrap.sh.tftpl for the details.
+  # Add `--skip-browser` to its Hermes installer call to leave out the browser tools if disk or
+  # memory gets tight.
+  bootstrap = templatefile("${path.module}/files/bootstrap.sh.tftpl", {
+    enable_dashboard       = var.enable_tailnet_dashboard
+    dashboard_fqdn         = local.tailnet_fqdn
+    node_name              = var.name
+    tailscale_auth_key     = var.tailscale_auth_key == null ? "" : var.tailscale_auth_key
+    dashboard_unit         = chomp(file("${path.module}/files/hermes-dashboard.service"))
+    dashboard_setup_script = chomp(file("${path.module}/files/hermes-dashboard-setup.sh"))
+  })
 
-    curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes-install.sh
-    chmod 755 /tmp/hermes-install.sh
-    sudo -u ubuntu -H bash /tmp/hermes-install.sh --non-interactive
-    rm -f /tmp/hermes-install.sh
-  EOT
+  # Optional var.user_data is a shell snippet appended after the bootstrap. Always marked
+  # sensitive: it can carry the Tailscale auth key, and this keeps it out of plan output.
+  user_data       = sensitive(var.user_data == null ? local.bootstrap : "${local.bootstrap}\n${var.user_data}")
+  user_data_bytes = length(nonsensitive(local.user_data))
 
-  # Optional var.user_data is a shell snippet appended after the bootstrap.
-  user_data = var.user_data == null ? local.bootstrap : "${local.bootstrap}\n${var.user_data}"
+  # Whether a Tailscale auth key was given (the key itself is sensitive; this boolean is not).
+  has_auth_key = nonsensitive(var.tailscale_auth_key != null)
 
   # The only inbound rule: SSH from the public IP of the machine running tofu, as a single /32.
   ssh_enabled     = var.ssh_allow_current_ip
@@ -205,12 +196,35 @@ resource "aws_instance" "this" {
   }
 
   lifecycle {
-    # "latest" AMI parameter moves over time; don't replace the instance when it does.
-    ignore_changes = [ami]
+    # ami: the "latest" AMI parameter moves over time; don't replace the instance when it does.
+    # user_data: cloud-init runs it once, on first boot, so a later edit (for example removing the
+    # one-off Tailscale auth key from your environment) would only stop and restart the instance for
+    # nothing. To re-run it on a fresh instance: tofu apply -replace=aws_instance.this
+    ignore_changes = [ami, user_data]
+
+    precondition {
+      condition     = local.user_data_bytes <= 16000
+      error_message = "user_data is ${local.user_data_bytes} bytes; EC2 allows at most 16384. Shorten var.user_data or the bootstrap files."
+    }
 
     precondition {
       condition     = !local.ssh_enabled || local.key_name != null
       error_message = "SSH is enabled (ssh_allow_current_ip) but there is no key to log in with. Set ssh_public_key (creates a key pair) or ssh_key_name (existing key pair)."
     }
+  }
+}
+
+# Warnings, not errors: both are fine in the right situation, so they must not block a plan.
+check "break_glass_access" {
+  assert {
+    condition     = local.ssh_enabled || local.key_name != null
+    error_message = "SSH is closed and no key pair is attached. If Tailscale does not come up you cannot get in, and adding a key pair later means replacing the instance. Keep ssh_public_key set as break-glass access: the security group stays closed until you set ssh_allow_current_ip = true."
+  }
+}
+
+check "a_way_in_exists" {
+  assert {
+    condition     = local.ssh_enabled || local.has_auth_key
+    error_message = "SSH is closed and no tailscale_auth_key is set. That is fine if this instance has already joined your tailnet; on a new instance nothing could reach it (there is no SSM)."
   }
 }
